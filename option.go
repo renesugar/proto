@@ -26,16 +26,18 @@ package proto
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"text/scanner"
 )
 
 // Option is a protoc compiler option
 type Option struct {
-	Position            scanner.Position
-	Comment             *Comment
-	Name                string
-	Constant            Literal
-	IsEmbedded          bool
+	Position   scanner.Position
+	Comment    *Comment
+	Name       string
+	Constant   Literal
+	IsEmbedded bool
+	// AggregatedConstants is DEPRECATED. These Literals are populated into Constant.OrderedMap
 	AggregatedConstants []*NamedLiteral
 	InlineComment       *Comment
 	Parent              Visitee
@@ -118,11 +120,34 @@ func (o *Option) Doc() *Comment {
 	return o.Comment
 }
 
-// Literal represents intLit,floatLit,strLit or boolLit
+// Literal represents intLit,floatLit,strLit or boolLit or a nested structure thereof.
 type Literal struct {
 	Position scanner.Position
 	Source   string
 	IsString bool
+	// literal value can be an array literal value (even nested)
+	Array []*Literal
+	// literal value can be a map of literals (even nested)
+	// DEPRECATED: use OrderedMap instead
+	Map map[string]*Literal
+	// literal value can be a map of literals (even nested)
+	// this is done as pairs of name keys and literal values so the original ordering is preserved
+	OrderedMap LiteralMap
+}
+
+// LiteralMap is like a map of *Literal but preserved the ordering.
+// Can be iterated yielding *NamedLiteral values.
+type LiteralMap []*NamedLiteral
+
+// Get returns a Literal from the map.
+func (m LiteralMap) Get(key string) (*Literal, bool) {
+	for _, each := range m {
+		if each.Name == key {
+			// exit on the first match
+			return each.Literal, true
+		}
+	}
+	return new(Literal), false
 }
 
 // SourceRepresentation returns the source (if quoted then use double quote).
@@ -140,7 +165,39 @@ func (l Literal) SourceRepresentation() string {
 
 // parse expects to read a literal constant after =.
 func (l *Literal) parse(p *Parser) error {
-	pos, _, lit := p.next()
+	pos, tok, lit := p.next()
+	if tok == tLEFTSQUARE {
+		// collect array elements
+		array := []*Literal{}
+		for {
+			e := new(Literal)
+			if err := e.parse(p); err != nil {
+				return err
+			}
+			array = append(array, e)
+			_, tok, lit := p.next()
+			if tok == tCOMMA {
+				continue
+			}
+			if tok == tRIGHTSQUARE {
+				break
+			}
+			return p.unexpected(lit, ", or ]", l)
+		}
+		l.Array = array
+		l.IsString = false
+		l.Position = pos
+		return nil
+	}
+	if tLEFTCURLY == tok {
+		l.Position, l.Source, l.IsString = pos, "", false
+		constants, err := parseAggregateConstants(p, l)
+		if err != nil {
+			return nil
+		}
+		l.OrderedMap = LiteralMap(constants)
+		return nil
+	}
 	if "-" == lit {
 		// negative number
 		if err := l.parse(p); err != nil {
@@ -151,11 +208,22 @@ func (l *Literal) parse(p *Parser) error {
 		return nil
 	}
 	source := lit
-	isString := isString(lit)
-	if isString {
+	iss := isString(lit)
+	if iss {
 		source = unQuote(source)
 	}
-	l.Position, l.Source, l.IsString = pos, source, isString
+	l.Position, l.Source, l.IsString = pos, source, iss
+
+	// peek for multiline strings
+	for {
+		pos, tok, lit := p.next()
+		if isString(lit) {
+			l.Source += unQuote(lit)
+		} else {
+			p.nextPut(pos, tok, lit)
+			break
+		}
+	}
 	return nil
 }
 
@@ -171,13 +239,54 @@ type NamedLiteral struct {
 // tLEFTCURLY { has been consumed
 func (o *Option) parseAggregate(p *Parser) error {
 	constants, err := parseAggregateConstants(p, o)
-	o.AggregatedConstants = constants
+	literalMap := map[string]*Literal{}
+	for _, each := range constants {
+		literalMap[each.Name] = each.Literal
+	}
+	o.Constant = Literal{Map: literalMap, OrderedMap: constants, Position: o.Position}
+
+	// reconstruct the old, deprecated field
+	o.AggregatedConstants = collectAggregatedConstants(literalMap)
 	return err
 }
 
+// flatten the maps of each literal, recursively
+// this func exists for deprecated Option.AggregatedConstants.
+func collectAggregatedConstants(m map[string]*Literal) (list []*NamedLiteral) {
+	for k, v := range m {
+		if v.Map != nil {
+			sublist := collectAggregatedConstants(v.Map)
+			for _, each := range sublist {
+				list = append(list, &NamedLiteral{
+					Name:        k + "." + each.Name,
+					PrintsColon: true,
+					Literal:     each.Literal,
+				})
+			}
+		} else {
+			list = append(list, &NamedLiteral{
+				Name:        k,
+				PrintsColon: true,
+				Literal:     v,
+			})
+		}
+	}
+	// sort list by position of literal
+	sort.Sort(byPosition(list))
+	return
+}
+
+type byPosition []*NamedLiteral
+
+func (b byPosition) Less(i, j int) bool {
+	return b[i].Literal.Position.Line < b[j].Literal.Position.Line
+}
+func (b byPosition) Len() int      { return len(b) }
+func (b byPosition) Swap(i, j int) { b[i], b[j] = b[j], b[i] }
+
 func parseAggregateConstants(p *Parser, container interface{}) (list []*NamedLiteral, err error) {
 	for {
-		pos, tok, lit := p.next()
+		pos, tok, lit := p.nextIdentifier()
 		if tRIGHTSQUARE == tok {
 			p.nextPut(pos, tok, lit)
 			// caller has checked for open square ; will consume rightsquare, rightcurly and semicolon
@@ -187,8 +296,14 @@ func parseAggregateConstants(p *Parser, container interface{}) (list []*NamedLit
 			return
 		}
 		if tSEMICOLON == tok {
-			p.nextPut(pos, tok, lit) // allow for inline comment parsing
-			return
+			// just consume it
+			continue
+			//return
+		}
+		if tCOMMENT == tok {
+			// assign to last parsed literal
+			// TODO: see TestUseOfSemicolonsInAggregatedConstants
+			continue
 		}
 		if tCOMMA == tok {
 			if len(list) == 0 {
@@ -197,7 +312,7 @@ func parseAggregateConstants(p *Parser, container interface{}) (list []*NamedLit
 			}
 			continue
 		}
-		if tIDENT != tok {
+		if tIDENT != tok && !isKeyword(tok) {
 			err = p.unexpected(lit, "option aggregate key", container)
 			return
 		}
@@ -223,13 +338,16 @@ func parseAggregateConstants(p *Parser, container interface{}) (list []*NamedLit
 				err = fault
 				return
 			}
-			// flatten the constants
+
+			// create the map
+			m := map[string]*Literal{}
 			for _, each := range nested {
-				flatten := &NamedLiteral{
-					Name:    key + "." + each.Name,
-					Literal: each.Literal}
-				list = append(list, flatten)
+				m[each.Name] = each.Literal
 			}
+			list = append(list, &NamedLiteral{
+				Name:        key,
+				PrintsColon: printsColon,
+				Literal:     &Literal{Map: m, OrderedMap: LiteralMap(nested)}})
 			continue
 		}
 		// no aggregate, put back token

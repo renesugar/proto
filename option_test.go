@@ -164,20 +164,11 @@ message Bar {
 	if got, want := len(f.Options), 1; got != want {
 		t.Fatalf("got [%v] want [%v]", got, want)
 	}
-	ac := f.Options[0].AggregatedConstants
+	ac := f.Options[0].Constant.Map
 	if got, want := len(ac), 2; got != want {
 		t.Fatalf("got [%v] want [%v]", got, want)
 	}
-	if got, want := ac[0].Name, "opt1"; got != want {
-		t.Fatalf("got [%v] want [%v]", got, want)
-	}
-	if got, want := ac[1].Name, "opt2"; got != want {
-		t.Fatalf("got [%v] want [%v]", got, want)
-	}
-	if got, want := ac[0].Source, "123"; got != want {
-		t.Fatalf("got [%v] want [%v]", got, want)
-	}
-	if got, want := ac[1].Source, "baz"; got != want {
+	if got, want := ac["opt1"].Source, "123"; got != want {
 		t.Fatalf("got [%v] want [%v]", got, want)
 	}
 	if got, want := o.Position.Line, 3; got != want {
@@ -189,10 +180,15 @@ message Bar {
 	if got, want := f.Position.String(), "<input>:5:3"; got != want {
 		t.Fatalf("got [%v] want [%v]", got, want)
 	}
-	if got, want := ac[0].Position.Line, 6; got != want {
+	if got, want := f.Options[0].Constant.Position.Line, 5; got != want {
 		t.Fatalf("got [%v] want [%v]", got, want)
 	}
-	if got, want := ac[1].Position.Line, 7; got != want {
+	// check for AggregatedConstants
+	list := f.Options[0].AggregatedConstants
+	if got, want := list[0].Source, "123"; got != want {
+		t.Fatalf("got [%v] want [%v]", got, want)
+	}
+	if got, want := list[1].Source, "baz"; got != want {
 		t.Fatalf("got [%v] want [%v]", got, want)
 	}
 }
@@ -247,6 +243,16 @@ func TestFieldCustomOptions(t *testing.T) {
 	if got, want := f.Options[1].Constant.Source, "2"; got != want {
 		t.Errorf("got [%v] want [%v]", got, want)
 	}
+	// check for AggregatedConstants
+	if got, want := f.Options[0].AggregatedConstants[0].Name, "hello"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := f.Options[0].AggregatedConstants[0].PrintsColon, true; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := f.Options[0].AggregatedConstants[0].Source, "1"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
 }
 
 func TestIgnoreIllegalEscapeCharsInAggregatedConstants(t *testing.T) {
@@ -263,6 +269,31 @@ func TestIgnoreIllegalEscapeCharsInAggregatedConstants(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := d.Elements[1].(*Message).Elements[0].(*NormalField)
+	if got, want := f.Options[0].Name, "(validate.rules).string"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := len(f.Options[0].Constant.Map), 2; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := f.Options[0].Constant.Map["pattern"].Source, "^[^\\d\\s]+( [^\\d\\s]+)*$"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := len(f.Options[0].Constant.OrderedMap), 2; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := f.Options[0].Constant.OrderedMap[0].Name, "pattern"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := f.Options[0].Constant.OrderedMap[0].Source, "^[^\\d\\s]+( [^\\d\\s]+)*$"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	// check for AggregatedConstants
+	if got, want := f.Options[0].AggregatedConstants[0].Name, "pattern"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := f.Options[0].AggregatedConstants[0].PrintsColon, true; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
 	if got, want := f.Options[0].AggregatedConstants[0].Source, "^[^\\d\\s]+( [^\\d\\s]+)*$"; got != want {
 		t.Errorf("got [%v] want [%v]", got, want)
 	}
@@ -322,29 +353,37 @@ func TestNestedAggregateConstants(t *testing.T) {
 	if got, want := option.Name, "(foo.bar)"; got != want {
 		t.Errorf("got [%v] want [%v]", got, want)
 	}
+	if got, want := len(option.Constant.Map), 2; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	m := option.Constant.Map
+	if got, want := m["woot"].Source, "100"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := len(m["foo"].Map), 3; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	m = m["foo"].Map
+	if got, want := len(m["bar"].Map), 1; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := m["bar"].Map["hello3"].Source, "400"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := option.Constant.OrderedMap[1].Name, "foo"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := option.Constant.OrderedMap[1].OrderedMap[2].Name, "bar"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := option.Constant.OrderedMap[1].OrderedMap[2].OrderedMap[0].Source, "400"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
 	if got, want := len(option.AggregatedConstants), 4; got != want {
 		t.Errorf("got [%v] want [%v]", got, want)
 	}
-	if got, want := option.AggregatedConstants[0].Name, "woot"; got != want {
-		t.Errorf("got [%v] want [%v]", got, want)
-	}
-	if got, want := option.AggregatedConstants[1].Name, "foo.hello"; got != want {
-		t.Errorf("got [%v] want [%v]", got, want)
-	}
-	if got, want := option.AggregatedConstants[2].Name, "foo.hello2"; got != want {
-		t.Errorf("got [%v] want [%v]", got, want)
-	}
-	if got, want := option.AggregatedConstants[3].Name, "foo.bar.hello3"; got != want {
-		t.Errorf("got [%v] want [%v]", got, want)
-	}
-	if got, want := option.AggregatedConstants[1].Literal.SourceRepresentation(), "200"; got != want {
-		t.Errorf("got [%v] want [%v]", got, want)
-	}
-	if got, want := option.AggregatedConstants[2].Literal.SourceRepresentation(), "300"; got != want {
-		t.Errorf("got [%v] want [%v]", got, want)
-	}
-	if got, want := option.AggregatedConstants[3].Literal.SourceRepresentation(), "400"; got != want {
-		t.Errorf("got [%v] want [%v]", got, want)
+	for _, each := range option.AggregatedConstants {
+		t.Logf("%#v=%v\n", each, each.SourceRepresentation())
 	}
 }
 
@@ -364,11 +403,209 @@ func TestMultiLineOptionAggregateValue(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	get := rpc.Options[0].AggregatedConstants[0]
-	if got, want := get.Name, "get"; got != want {
+	get := rpc.Options[0].Constant.Map["get"]
+	if got, want := get.Source, "/v1/{parent=projects/*/locations/*/transferConfigs/*/runs/*}/transferLogs"; got != want {
 		t.Errorf("got [%v] want [%v]", got, want)
 	}
-	if got, want := get.Literal.Source, "/v1/{parent=projects/*/locations/*/transferConfigs/*/runs/*}/transferLogs"; got != want {
+}
+
+// issue #76
+func TestOptionAggregateCanUseKeyword(t *testing.T) {
+	src := `message User {
+		string email = 3 [(validate.field) = {required: true}];
+	}`
+	p := newParserOn(src)
+	_, err := p.Parse()
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+// issue #77
+func TestOptionAggregateWithRepeatedValues(t *testing.T) {
+	src := `message Envelope {
+		int64 not_in = 15 [(validate.rules).int64 = {not_in: [40, 45]}];
+		int64 in = 16 [(validate.rules).int64 = {in: [[1],[2]]}];
+	}`
+	p := newParserOn(src)
+	def, err := p.Parse()
+	if err != nil {
+		t.Error(err)
+	}
+	field := def.Elements[0].(*Message).Elements[0].(*NormalField)
+	notIn := field.Options[0].Constant.Map["not_in"]
+	if got, want := len(notIn.Array), 2; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := notIn.Array[0].Source, "40"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := notIn.Array[1].Source, "45"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+}
+
+func TestInvalidOptionAggregateWithRepeatedValues(t *testing.T) {
+	src := `message Bogus {
+		int64 a = 1 [a = {not_in: [40 syntax]}];
+	}`
+	p := newParserOn(src)
+	_, err := p.Parse()
+	if err == nil {
+		t.Error("expected syntax error")
+	}
+}
+
+// issue #79
+func TestUseOfSemicolonsInAggregatedConstants(t *testing.T) {
+	src := `rpc Test(Void) returns (Void) {
+				option (google.api.http) = {
+					post: "/api/v1/test";
+					body: "*"; // ignored comment
+				};
+			}`
+	p := newParserOn(src)
+	rpc := new(RPC)
+	p.next()
+	err := rpc.parse(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(rpc.Elements), 1; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	opt := rpc.Elements[0].(*Option)
+	if got, want := len(opt.Constant.Map), 2; got != want {
+		t.Fatalf("got [%v] want [%v]", got, want)
+	}
+	// old access to map
+	if got, want := opt.Constant.Map["body"].Source, "*"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	// new access to map
+	body, ok := opt.Constant.OrderedMap.Get("body")
+	if !ok {
+		t.Fatal("expected body key")
+	}
+	if got, want := body.Source, "*"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	for _, each := range opt.Constant.OrderedMap {
+		t.Log(each)
+	}
+}
+
+func TestParseNestedSelectorInAggregatedConstant(t *testing.T) {
+	src := `rpc Test(Void) returns (Void) {
+		option (google.api.http) = {
+			get: "/api/v1/test"
+			additional_bindings.post: "/api/v1/test"
+			additional_bindings.body: "*"
+		};
+	}`
+	p := newParserOn(src)
+	rpc := new(RPC)
+	p.next()
+	err := rpc.parse(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := rpc.Options[0].Constant.Map["get"].Source, "/api/v1/test"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := rpc.Options[0].Constant.Map["additional_bindings.post"].Source, "/api/v1/test"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := rpc.Options[0].AggregatedConstants[2].Name, "additional_bindings.body"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := rpc.Options[0].AggregatedConstants[2].Source, "*"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+}
+
+func TestParseMultilineStringConstant(t *testing.T) {
+	src := `message Test {
+		string description = 3 [
+			(common.ui_field_desc) = "Description of the account"
+									 " domain (e.g. Team,"
+									 "Name User Account Directory)."
+  		];
+	}`
+	p := newParserOn(src)
+	m := new(Message)
+	p.next()
+	err := m.parse(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := m.Elements[0].(*NormalField).Options[0].Constant.Source
+	if got, want := s, "Description of the account domain (e.g. Team,Name User Account Directory)."; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+}
+
+func TestOptionWithRepeatedMessageValues(t *testing.T) {
+	src := `message Foo {
+		int64 a = 1 [b = {repeated_message_field: [{hello: 1}, {hello: 2}]}];
+	}`
+	p := newParserOn(src)
+	def, err := p.Parse()
+	if err != nil {
+		t.Errorf("expected no error but got %v", err)
+	}
+	opt := def.Elements[0].(*Message).Elements[0].(*NormalField).Options[0]
+	hello, ok := opt.AggregatedConstants[0].Array[0].OrderedMap.Get("hello")
+	if !ok {
+		t.Fail()
+	}
+	if got, want := hello.SourceRepresentation(), "1"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+}
+
+func TestOptionWithRepeatedMessageValuesWithArray(t *testing.T) {
+	src := `message Foo {
+		int64 a = 1 [ (bar.repeated_field_dep_option) = 
+			{ hello: 1, repeated_dep: [
+				{ hello: 1, repeated_bar: [1, 2] },
+				{ hello: 3, repeated_bar: [3, 4] } ] } ];
+	}`
+	p := newParserOn(src)
+	def, err := p.Parse()
+	if err != nil {
+		t.Errorf("expected no error but got %v", err)
+	}
+	opt := def.Elements[0].(*Message).Elements[0].(*NormalField).Options[0]
+	hello, ok := opt.Constant.OrderedMap.Get("hello")
+	if !ok {
+		t.Fail()
+	}
+	if got, want := hello.SourceRepresentation(), "1"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	repeatedDep, ok := opt.Constant.OrderedMap.Get("repeated_dep")
+	if !ok {
+		t.Fail()
+	}
+	if got, want := len(repeatedDep.Array), 2; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	hello, ok = repeatedDep.Array[0].OrderedMap.Get("hello")
+	if !ok {
+		t.Fail()
+	}
+	if got, want := hello.SourceRepresentation(), "1"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	onetwo, ok := repeatedDep.Array[0].OrderedMap.Get("repeated_bar")
+	if !ok {
+		t.Fail()
+	}
+	if got, want := onetwo.Array[0].Source, "1"; got != want {
+		t.Errorf("got [%v] want [%v]", got, want)
+	}
+	if got, want := onetwo.Array[1].Source, "2"; got != want {
 		t.Errorf("got [%v] want [%v]", got, want)
 	}
 }
